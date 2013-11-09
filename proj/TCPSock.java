@@ -243,7 +243,10 @@ public class TCPSock {
       return -1;
     }
 
-    return 0;
+    len = Math.min(len, buf.length - pos);
+    len = Math.min(len, (endData - startData + BUFFER_SIZE) % BUFFER_SIZE);
+    readBytesFromBuffer(buf, pos, len);
+    return len;
   }
 
   /*
@@ -252,7 +255,8 @@ public class TCPSock {
 
   // Additional functions
   public void acceptPacket(Transport transportPacket, int from_adr) {
-
+    if (!stateEstablished || state == State.CLOSED) 
+      return; 
   }
 
   // When you send a packet, add an event for handleSocketTimeout
@@ -271,6 +275,12 @@ public class TCPSock {
     }
     return acceptedBytes;
   }
+
+  protected void readBytesFromBuffer(byte[] buf, int pos, int len) {
+    for (int i = pos; i < len; i++) {
+      buf[i] = buffer[startData++];
+    }
+  } 
 
   // Start initial sequence number relatively low, so we don't
   // have to worry about overflow
