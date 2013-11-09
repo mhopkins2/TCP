@@ -27,17 +27,20 @@ public class SimpleTCPSockSpace {
   // if this count is 0.
   Hashtable<String, Integer> socketCounts;
 
-  public SimpleTCPSockSpace() {
+  private Node node;
+
+  public SimpleTCPSockSpace(Node node) {
     listenSockets = new Hashtable<String, TCPSock>();
     connectionSockets = new Hashtable<String, TCPSock>();
     socketCounts = new Hashtable<String, Integer>();
+    this.node = node;
   }
 
   // Return true and award port to inquiring TCPSock if no 
   // TCPSock is currently bound to src_adr:src_port
   boolean claimPort(int src_adr, int src_port) {
     String key = src_adr + ":" + src_port;
-    if (!socketCounts.contains(key) || socketCounts.get(key) == 0) {
+    if (!socketCounts.containsKey(key) || socketCounts.get(key) == 0) {
       socketCounts.put(key, 1);
       return true;
     }
@@ -68,13 +71,13 @@ public class SimpleTCPSockSpace {
     String fullKey = src_adr + ":" + src_port + ":" + dest_adr + ":" + dest_port;
     String partialKey = src_adr + ":" + src_port;
 
-    if (connectionSockets.contains(fullKey)) {
+    if (connectionSockets.containsKey(fullKey)) {
       return false;
     }
     else {
       // This connection corresponds to a new connection
       // initiated by a welcome socket
-      if (listenSockets.contains(partialKey)) {
+      if (listenSockets.containsKey(partialKey)) {
         socketCounts.put(partialKey, socketCounts.get(partialKey) + 1);
       }
       connectionSockets.put(fullKey, socket);
@@ -94,13 +97,17 @@ public class SimpleTCPSockSpace {
   // address and port, return that connection. Otherwise, return a listen connection
   // at local address and port if it exists. Otherwise, return null.
   TCPSock demultiplexConnection(int src_adr, int src_port, int dest_adr, int dest_port) {
+    node.logDebug("demultiplexConnection: listening sockets count: " + listenSockets.size());
+    node.logDebug("demultiplexConnection: connection sockets count: " + connectionSockets.size());
+    node.logDebug("demultiplexConnection: searching for: " + src_adr + ":" + src_port + " " + dest_adr + ":" + dest_port);
+
     String connectionKey = src_adr + ":" + src_port + ":" + dest_adr + ":" + dest_port;
     String listenKey = src_adr + ":" + src_port;
 
-    if (connectionSockets.contains(connectionKey)) {
+    if (connectionSockets.containsKey(connectionKey)) {
       return connectionSockets.get(connectionKey);
     }
-    else if (listenSockets.contains(listenKey)) {
+    else if (listenSockets.containsKey(listenKey)) {
       return listenSockets.get(listenKey);
     }
     else {

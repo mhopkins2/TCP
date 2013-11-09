@@ -25,6 +25,7 @@ import java.lang.reflect.Method;
  */
 public class Node {
   private final long PingTimeout = 10000;  // Timeout pings in 10 seconds
+  private final boolean DEBUG = false;
 
   private Manager manager;
   private int addr;
@@ -194,7 +195,7 @@ public class Node {
 
   // Pass TCP Packet to TCPManager
   private void receiveTransportPacket(Packet packet) {
-    logOutput("Received TCP packet from " + packet.getSrc() + " at node layer");
+    logDebug("Received TCP packet from " + packet.getSrc() + " at node layer");
     Transport packetPayload = Transport.unpack(packet.getPayload());
     if (packetPayload != null) {
       tcpMan.receiveTransportPacket(packetPayload, packet.getSrc(), packet.getDest());
@@ -248,6 +249,12 @@ public class Node {
 
   public void logOutput(String output) {
 	  this.log(output, System.out);
+  }
+
+  public void logDebug(String output) {
+    if (DEBUG) {
+      this.log(output, System.out);
+    }
   }
 
   private void log(String output, PrintStream stream) {

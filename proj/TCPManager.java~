@@ -53,40 +53,51 @@ public class TCPManager {
 
   // Stub to demultiplex received packets
   public void receiveTransportPacket(Transport transportPacket, int from_adr, int to_adr) {
+    node.logDebug("receiveTransportPacket: from " + from_adr + ", " + "to " + to_adr);
+
     int from_port = transportPacket.getSrcPort();
     int to_port = transportPacket.getDestPort();
     TCPSock toSock = activeConnections.demultiplexConnection(to_adr, to_port, from_adr, from_port);
     // Connection exists to send packet to.
     if (toSock != null) {
+      node.logDebug("receiveTransportPacket: connection found");
       toSock.acceptPacket(transportPacket, from_adr);
     }
     // Send fin packet to sender because connection refused.
     else {
+      node.logDebug("receiveTransportPacket: connection not found");
       Transport returnPacket = new Transport(to_port, from_port, Transport.FIN, TCPSock.DEFAULT_WINDOW, 0, dummy);
       byte[] payload = returnPacket.pack();
       node.sendSegment(to_adr, from_adr, Protocol.TRANSPORT_PKT, payload);
     }
   }
 
-  boolean claimPort(int src_adr, int src_port) {
+  ///////// Helper functions which call corresponding methods in SimpleTCPSockSpace ////////////////
+  boolean claimPort(int src_adr, int src_port) {    
+    node.logDebug("claimPort: request for " + src_adr + ":" + src_port);
     return activeConnections.claimPort(src_adr, src_port);
   }
 
   boolean registerListenSocket(int src_adr, int src_port, TCPSock socket) {
+    node.logDebug("registerListenSocket: request for " + src_adr + ":" + src_port);
     return activeConnections.registerListenSocket(src_adr, src_port, socket);
   }
 
   boolean resgisterConnectionSocket(int src_adr, int src_port,
                                     int dest_adr, int dest_port, TCPSock socket) {
+    node.logDebug("registerConnectionSocket: request for " + src_adr + ":" + src_port + " " + dest_adr + ":" + dest_port);
     return activeConnections.resgisterConnectionSocket(src_adr, src_port,
                                                        dest_adr, dest_port, socket);
   }
 
   void deregisterListenSocket(int src_adr, int src_port) {
+    node.logDebug("deregisterListenSocket: request for " + src_adr + ":" + src_port);
     activeConnections.deregisterListenSocket(src_adr, src_port);
   }
 
   void deregisterConnectionSocket(int src_adr, int src_port, int dest_adr, int dest_port) {
+    node.logDebug("deregisterConnectinoSocket: request for " + src_adr + ":" + src_port + " " + dest_adr + ":" + dest_port);
     activeConnections.deregisterConnectionSocket(src_adr, src_port, dest_adr, dest_port);
   }
+  ////////////////////////////////////////////////////////////////////////////////////////////////
 }
