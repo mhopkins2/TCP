@@ -1,3 +1,5 @@
+import java.lang.reflect.Method;
+
 /**
  * <p>Title: CPSC 433/533 Programming Assignment</p>
  *
@@ -15,6 +17,7 @@ public class TCPSock {
 
   public static final int DEFAULT_WINDOW = 16 * 1024;
   private static final int BUFFER_SIZE = 1024 * 1024;
+  private static final double BETA = 0.25;
   private static final byte dummy[] = new byte[0];
 
   // TCP socket states
@@ -29,6 +32,7 @@ public class TCPSock {
   private State state;
   private Node node;
   private TCPManager tcpMan;
+  private Manager manager;
 
   private int local_adr;
   private int local_port;
@@ -42,18 +46,25 @@ public class TCPSock {
   // Nonlistener state
   boolean clientSocket;
   int currentSeqNo;
+  int currentWindowSize;
   int dest_adr;
   int dest_port;
   byte[] buffer;
   int startData;
   int endData;
+  int estimatedRTT;
+  int devRTT;
 
-  public TCPSock(Node node, TCPManager tcpMan, int local_adr) {
+  public TCPSock(Node node, TCPManager tcpMan, Manager manager, int local_adr) {
     this.node = node;
     this.tcpMan = tcpMan;
+    this.manager = manager;
     this.local_adr = local_adr;
     this.local_port = -1;
     this.stateEstablished = false;
+    this.currentWindowSize = DEFAULT_WINDOW;
+    this.estimatedRTT = 100;
+    this.devRTT = 20;
   }
 
   /*
@@ -146,10 +157,10 @@ public class TCPSock {
     startData = 0;
     endData = 0;
     currentSeqNo = getStartingSeqNo();
-    Transport conInitiation = new Transport(local_port, destPort, Transport.SYN, DEFAULT_WINDOW, currentSeqNo, dummy);
-    byte[] payload = conInitiation.pack();
-    node.sendSegment(local_adr, destAddr, Protocol.TRANSPORT_PKT, payload);
+    sendTransportPacket(Transport.SYN, currentSeqNo, dummy);
+    updateTimer();
     state = State.SYN_SENT;
+    currentSeqNo++;
     stateEstablished = true;
     return 0;
   }
@@ -169,7 +180,7 @@ public class TCPSock {
       Transport returnPacket = new Transport(local_port, dest_port, Transport.FIN, TCPSock.DEFAULT_WINDOW, currentSeqNo, dummy);
       byte[] payload = returnPacket.pack();
       node.sendSegment(local_adr, dest_adr, Protocol.TRANSPORT_PKT, payload);
-      state = state.SHUTDOWN;
+      state = state.CLOSED;
     }
     else {
       state = state.SHUTDOWN;
@@ -204,7 +215,17 @@ public class TCPSock {
       return -1;
     }
 
-    return 0;
+    len = Math.min(len, buf.length - pos);
+    len = Math.min(len, currentWindowSize - (endData - startData + BUFFER_SIZE) % BUFFER_SIZE);
+    if (len != 0) {
+      byte[] acceptedBytes = getAcceptedBytes(buf, pos, len);
+      sendTransportData(currentSeqNo, acceptedBytes);
+      updateTimer();
+      currentSeqNo += len;
+      addDataToBuffer(acceptedBytes);
+    }
+
+    return len;
   }
 
   /**
@@ -221,6 +242,8 @@ public class TCPSock {
     if (!stateEstablished || state != State.ESTABLISHED || clientSocket) {
       return -1;
     }
+
+    return 0;
   }
 
   /*
@@ -232,9 +255,63 @@ public class TCPSock {
 
   }
 
+  // When you send a packet, add an event for handleSocketTimeout
+  // with the initial sequence number of the packet as an argument (for the callback)
+  protected void handleSocketTimeout(int sequenceNumber) {
+    if (sequenceNumber != currentSeqNo) {
+      return;
+    }
+    
+  }
+
+  protected byte[] getAcceptedBytes(byte[] buf, int pos, int len) {
+    byte[] acceptedBytes = new byte[len];
+    for (int i = 0; i < len; i++) {
+      acceptedBytes[i] = buf[pos + i];
+    }
+    return acceptedBytes;
+  }
+
   // Start initial sequence number relatively low, so we don't
   // have to worry about overflow
-  public int getStartingSeqNo() {
+  protected int getStartingSeqNo() {
     return (int) (Math.random() * (1 << 16));
+  }
+
+  protected void sendTransportData(int seqNo, byte[] payload) {
+    for (int i = 0; i < payload.length; i += Transport.MAX_PAYLOAD_SIZE) {
+      int abbreviatedLength = Math.min(Transport.MAX_PAYLOAD_SIZE, payload.length - i);
+      byte[] abbreviatedData = new byte[abbreviatedLength];
+      for (int j = 0; j < abbreviatedLength; j++) {
+        abbreviatedData[j] = payload[i];
+      }
+      sendTransportPacket(Transport.DATA, seqNo + i, abbreviatedData);
+    }
+  }
+
+  protected void sendTransportPacket(int transportType, int seqNo, byte[] payload) {
+    Transport transportPacket = new Transport(local_port, dest_port, transportType, currentWindowSize, seqNo, payload);
+    byte[] packetPayload = transportPacket.pack();
+    node.sendSegment(local_adr, dest_adr, Protocol.TRANSPORT_PKT, packetPayload);
+  }
+
+  protected void updateTimer() {
+	  try {
+      String[] paramTypes = {"Integer"};
+      Object[] params = {new Integer(currentSeqNo)};
+	    Method method = Callback.getMethod("handleSocketTimeout", this, paramTypes);
+	    Callback cb = new Callback(method, this, params);
+	    this.manager.addTimer(local_adr, estimatedRTT + 4 * devRTT, cb);
+	  }catch(Exception e) {
+	    logError("Failed to add timer callback. Method Name: " + "handleSocketTimeout" +
+		     "\nException: " + e);
+	  }
+  }
+
+  protected void addDataToBuffer(byte[] dataToAdd) {
+    for (int i = 0; i < dataToAdd.length; i++) {
+      buffer[endData] = dataToAdd[i];
+      endData = (endData + 1) % BUFFER_SIZE;
+    }
   }
 }

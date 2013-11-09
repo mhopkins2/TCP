@@ -87,6 +87,6 @@ public class TCPManager {
   }
 
   void deregisterConnectionSocket(int src_adr, int src_port, int dest_adr, int dest_port) {
-    activeConnections.deresgisterConnectionSocket(src_adr, src_port, dest_adr, dest_port);
+    activeConnections.deregisterConnectionSocket(src_adr, src_port, dest_adr, dest_port);
   }
 }
