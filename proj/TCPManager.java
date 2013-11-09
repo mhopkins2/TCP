@@ -68,6 +68,7 @@ public class TCPManager {
     }
   }
 
+  ///////// Helper functions which call corresponding methods in SimpleTCPSockSpace ////////////////
   boolean claimPort(int src_adr, int src_port) {
     return activeConnections.claimPort(src_adr, src_port);
   }
@@ -89,4 +90,5 @@ public class TCPManager {
   void deregisterConnectionSocket(int src_adr, int src_port, int dest_adr, int dest_port) {
     activeConnections.deregisterConnectionSocket(src_adr, src_port, dest_adr, dest_port);
   }
+  ////////////////////////////////////////////////////////////////////////////////////////////////
 }

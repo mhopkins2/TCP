@@ -259,8 +259,12 @@ public class TCPSock {
     // If some writing can occur
     if (len != 0) {
       byte[] acceptedBytes = getAcceptedBytes(buf, pos, len);
-      sendTransportData(currentSeqNo, acceptedBytes);
-      updateTimer(currentSeqNo);
+
+      if (state == State.ESTABLISHED) {
+        sendTransportData(currentSeqNo, acceptedBytes);
+        updateTimer(currentSeqNo); 
+      }
+
       currentSeqNo += len;
       addDataToBuffer(acceptedBytes);
     }
@@ -297,8 +301,10 @@ public class TCPSock {
 
   // Additional functions
   public void acceptPacket(Transport transportPacket, int from_adr) {
+    printCharacterForPacket(transportPacket.getType(), transportPacket.getSeqNo());
+
     if (!stateEstablished || state == State.CLOSED) 
-      return; 
+      return;
     
     // Incoming connection on listen socket and there is room in the request queue.
     if (state == State.LISTEN && transportPacket.getType() == Transport.SYN && entryPointer < requestQueue.length) {
@@ -331,7 +337,11 @@ public class TCPSock {
              transportPacket.getSeqNo() >= currentSeqNo - bufferedDataSize()) {
       state = state.ESTABLISHED;
       timerOutstanding = false;
+
+      // If there is data in the buffer, send it all because no data has been 
+      // send while socket was in SYN_SENT state.
       if (startData != endData) {
+        sendAllDataInBuffer();
         updateTimer(currentSeqNo - bufferedDataSize());
       }
     }
@@ -347,6 +357,35 @@ public class TCPSock {
       state = State.CLOSED;
     }
     
+  }
+
+  protected printCharacterForPacket(int packetType, int seqNo) {
+    if (packetType == Transport.SYN) {
+      System.out.print("S");
+    }
+    else if (packetType == Transport.FIN) {
+      System.out.print("F"):
+    }
+    else if (packetType == Transport.DATA && seqNo >= currentSeqNo) {
+      System.out.print(".");
+    }
+    else if (packetType == Transport.DATA && seqNo < currentSeqNo) {
+      System.out.print("!");
+    }
+    else if (packetType == Transport.ACK && seqNo > currentSeqNo - bufferedDataSize()) {
+      System.out.print(":");
+    }
+    else if (packetType == Transport.ACK && seqNo <= currentSeqNo - bufferedDataSize()) {
+      System.out.print("?");
+    }
+  }
+
+  protected void sendAllDataInBuffer() {
+    byte[] payload = new byte[bufferedDataSize()];
+    for (int i = 0; i < payload.length; i++) {
+      payload[i] = buffer[(startData + i) % BUFFER_SIZE];
+    }
+    sendTransportData(currentSeqNo - payload.length, payload);
   }
 
   // The first byte of 'newData' corresponds to the sequence number 'seqNo'.
@@ -385,6 +424,9 @@ public class TCPSock {
       timerOutstanding = false;
       sendTransportPacket(Transport.SYN, seqNo, dummy);
       updateTimer(seqNo);
+    
+      // Print character for retransmission
+      System.out.print("!");
     }
     // Timeout of DATA packet
     else if ((state == State.ESTABLISHED || state == State.SHUTDOWN) &&
@@ -393,6 +435,9 @@ public class TCPSock {
       byte[] payload = getFirstBufferedDataPacket();
       sendTransportPacket(Transport.DATA, seqNo, payload);
       updateTimer(seqNo);
+
+      // Print character for retransmission
+      System.out.print("!");
     }
   }
 

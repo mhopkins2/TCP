@@ -42,7 +42,7 @@ public class TCPManager {
    *                 a local port
    */
   public TCPSock socket() {
-    return new TCPSock(node, this, addr);
+    return new TCPSock(node, this, manager, addr);
   }
 
   /*

@@ -33,6 +33,8 @@ public class SimpleTCPSockSpace {
     socketCounts = new Hashtable<String, Integer>();
   }
 
+  // Return true and award port to inquiring TCPSock if no 
+  // TCPSock is currently bound to src_adr:src_port
   boolean claimPort(int src_adr, int src_port) {
     String key = src_adr + ":" + src_port;
     if (!socketCounts.contains(key) || socketCounts.get(key) == 0) {

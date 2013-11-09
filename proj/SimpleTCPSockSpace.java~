@@ -73,7 +73,7 @@ public class SimpleTCPSockSpace {
       // This connection corresponds to a new connection
       // initiated by a welcome socket
       if (listenSockets.contains(partialKey)) {
-        socketCounts.put(socketCounts.get(partialKey) + 1);
+        socketCounts.put(partialKey, socketCounts.get(partialKey) + 1);
       }
       connectionSockets.put(fullKey, socket);
       return true;
