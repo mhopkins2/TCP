@@ -1,4 +1,5 @@
 import java.lang.reflect.Method;
+import java.util.Hashtable;
 
 /**
  * <p>Title: CPSC 433/533 Programming Assignment</p>
@@ -51,7 +52,7 @@ public class TCPSock {
   int dest_adr;
   int dest_port;
   byte[] buffer;
-  Hastable<int, int> outOfOrderBytes; // Buffer for bytes received out of order
+  Hashtable<Integer, byte> outOfOrderBytes; // Buffer for bytes received out of order
   int startData;                    // For sender, the earliest byte that has not yet been ack'ed
                                     // For receiver, the earliest byte that has not yet been read by application
   int endData;                      // For sender, the latest byte sent that has not yet been ack'ed
@@ -90,7 +91,7 @@ public class TCPSock {
     this.currentSeqNo = initialSeqNo;
     this.currentWindowSize = DEFAULT_WINDOW;
     this.buffer = new byte[BUFFER_SIZE];
-    this.outOfOrderBytes = new Hashtable<int, int>();
+    this.outOfOrderBytes = new Hashtable<Integer, byte>();
     this.startData = 0;
     this.endData = 0;
     this.state = State.ESTABLISHED;
@@ -211,6 +212,7 @@ public class TCPSock {
     // outstanding data which has not yet been ack'ed, then release the socket.
     if (stateEstablished && (state == State.LISTEN || !clientSocket || startData == endData)) {
       release();
+    }
     else {
       state = state.SHUTDOWN;
     }
@@ -301,7 +303,7 @@ public class TCPSock {
 
   // Additional functions
   public void acceptPacket(Transport transportPacket, int from_adr) {
-    printCharacterForPacket(transportPacket.getType(), transportPacket.getSeqNo());
+    printCharacterForPacket(transportPacket.getType(), transportPacket.getSeqNum());
 
     if (!stateEstablished || state == State.CLOSED) 
       return;
@@ -316,9 +318,9 @@ public class TCPSock {
     // Ack packet for some data that has not yet been ack'ed.
     else if ((state == state.ESTABLISHED || state == state.SHUTDOWN) && clientSocket && 
               transportPacket.getType() == Transport.ACK &&
-              transportPacket.getSeqNo() > currentSeqNo - bufferedDataSize() &&
-              transportPacket.getSeqNo() <= currentSeqNo) {
-      int unackedBytes = currentSeqNo - transportPacket.getSeqNo();
+              transportPacket.getSeqNum() > currentSeqNo - bufferedDataSize() &&
+              transportPacket.getSeqNum() <= currentSeqNo) {
+      int unackedBytes = currentSeqNo - transportPacket.getSeqNum();
       startData = (endData - unackedBytes + BUFFER_SIZE) % BUFFER_SIZE;
       timerOutstanding = false;
       if (startData != endData) {
@@ -334,7 +336,7 @@ public class TCPSock {
 
     // Acknowledgement for an outstanding SYN packet
     else if (state == state.SYN_SENT && transportPacket.getType() == Transport.ACK &&
-             transportPacket.getSeqNo() >= currentSeqNo - bufferedDataSize()) {
+             transportPacket.getSeqNum() >= currentSeqNo - bufferedDataSize()) {
       state = state.ESTABLISHED;
       timerOutstanding = false;
 
@@ -348,23 +350,23 @@ public class TCPSock {
 
     // Accept incoming data into buffer if space permits.
     else if (state == state.ESTABLISHED && !clientSocket && transportPacket.getType() == Transport.DATA) {
-      bufferReceivedData(transportPacket.getPayload(), transportPacket.getSeqNo());
+      bufferReceivedData(transportPacket.getPayload(), transportPacket.getSeqNum());
       sendTransportPacket(Transport.ACK, currentSeqNo, dummy);
     } 
 
-    else if (transportPacket.getType() == Transport.FIN && state != State.LISTEN && State != State.CLOSED) {
+    else if (transportPacket.getType() == Transport.FIN && state != State.LISTEN && state != State.CLOSED) {
       tcpMan.deregisterConnectionSocket(local_adr, local_port, dest_adr, dest_port);
       state = State.CLOSED;
     }
     
   }
 
-  protected printCharacterForPacket(int packetType, int seqNo) {
+  protected void printCharacterForPacket(int packetType, int seqNo) {
     if (packetType == Transport.SYN) {
       System.out.print("S");
     }
     else if (packetType == Transport.FIN) {
-      System.out.print("F"):
+      System.out.print("F");
     }
     else if (packetType == Transport.DATA && seqNo >= currentSeqNo) {
       System.out.print(".");
