@@ -16,11 +16,11 @@ import java.util.Hashtable;
 
 public class TCPSock {
 
-  public static final int DEFAULT_WINDOW = 16 * 1024;
+  public static final int DEFAULT_WINDOW = 16 * 1;
   private static final int BUFFER_SIZE = 1024 * 1024;
   private static final double BETA = 0.25;
-  private static final int INITIAL_ESTIMATE_RTT = 1000;
-  private static final int INITIAL_DEV_RTT = 20;
+  private static final int INITIAL_ESTIMATE_RTT = 40;
+  private static final int INITIAL_DEV_RTT = 10;
   private static final byte dummy[] = new byte[0];
 
   private Node node;
@@ -472,6 +472,8 @@ public class TCPSock {
   // When you send a packet, add an event for handleSocketTimeout
   // with the initial sequence number of the packet as an argument (for the callback)
   public void handleSocketTimeout(Integer seqNo) {
+    node.logDebug("handleSocketTimeout: Timeout occured for seqNo " + seqNo);
+
     // Timeout of SYN packet
     if (state == State.SYN_SENT) {
       timerOutstanding = false;
@@ -551,7 +553,8 @@ public class TCPSock {
   protected void sendTransportPacket(int transportType, int seqNo, byte[] payload, boolean repeat) {
     //printSenderCharacter(transportType, repeat);
 
-    node.logDebug("sendTransportPacket: sequence number " + seqNo);
+    node.logDebug("sendTransportPacket: sequence number of packet " + seqNo);
+    node.logDebug("sendTransportPacket: sequence number of node " + currentSeqNo);
     node.logDebug("sendTransportPacket: the following bytes were sent as payload");
     for (int i = 0; i < payload.length; i++) {
       node.logDebug(i + ": " + payload[i]);
