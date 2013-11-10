@@ -66,7 +66,8 @@ public class TCPManager {
     // Send fin packet to sender because connection refused.
     else {
       node.logDebug("receiveTransportPacket: connection not found");
-      Transport returnPacket = new Transport(to_port, from_port, Transport.FIN, TCPSock.DEFAULT_WINDOW, 0, dummy);
+      Transport returnPacket = new Transport(to_port, from_port, Transport.FIN, TCPSock.DEFAULT_WINDOW, 
+                                             transportPacket.getSeqNum() + 1, dummy);
       byte[] payload = returnPacket.pack();
       node.sendSegment(to_adr, from_adr, Protocol.TRANSPORT_PKT, payload);
     }
@@ -98,6 +99,11 @@ public class TCPManager {
   void deregisterConnectionSocket(int src_adr, int src_port, int dest_adr, int dest_port) {
     node.logDebug("deregisterConnectinoSocket: request for " + src_adr + ":" + src_port + " " + dest_adr + ":" + dest_port);
     activeConnections.deregisterConnectionSocket(src_adr, src_port, dest_adr, dest_port);
+  }
+
+  void deregisterPortOnly(int src_adr, int src_port) {
+    node.logDebug("releasePortOnly: request for " + src_adr + ":" + src_port);
+    activeConnections.deregisterPortOnly(src_adr, src_port);
   }
   ////////////////////////////////////////////////////////////////////////////////////////////////
 }

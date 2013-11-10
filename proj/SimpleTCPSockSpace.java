@@ -38,8 +38,8 @@ public class SimpleTCPSockSpace {
 
   // Return true and award port to inquiring TCPSock if no 
   // TCPSock is currently bound to src_adr:src_port
-  boolean claimPort(int src_adr, int src_port) {
-    String key = src_adr + ":" + src_port;
+  public boolean claimPort(int src_adr, int src_port) {
+    String key = getLocalConnectionString(src_adr, src_port);
     if (!socketCounts.containsKey(key) || socketCounts.get(key) == 0) {
       socketCounts.put(key, 1);
       return true;
@@ -51,25 +51,25 @@ public class SimpleTCPSockSpace {
 
   // Add new listen socket and return true since claimPort must have already
   // been called. Therefore, there cannot be a conflicting listen socket.
-  boolean registerListenSocket(int src_adr, int src_port, TCPSock socket) {
-    String key = src_adr + ":" + src_port;
+  public boolean registerListenSocket(int src_adr, int src_port, TCPSock socket) {
+    String key = getLocalConnectionString(src_adr, src_port);
     listenSockets.put(key, socket);
     return true;
   }
 
   // Remove listen socket
-  void deregisterListenSocket(int src_adr, int src_port) {
-    String key = src_adr + ":" + src_port;
+  public void deregisterListenSocket(int src_adr, int src_port) {
+    String key = getLocalConnectionString(src_adr, src_port);
     socketCounts.put(key, socketCounts.get(key) - 1);
     listenSockets.remove(key);
   }
 
   // Add new direct connection socket and return true if there isn't already another
   // direct connection socket at src_adr:src_port to dest_adr:dest_port
-  boolean resgisterConnectionSocket(int src_adr, int src_port,
-                                        int dest_adr, int dest_port, TCPSock socket) {
-    String fullKey = src_adr + ":" + src_port + ":" + dest_adr + ":" + dest_port;
-    String partialKey = src_adr + ":" + src_port;
+  public boolean resgisterConnectionSocket(int src_adr, int src_port,
+                                    int dest_adr, int dest_port, TCPSock socket) {
+    String fullKey = getFullConnectionString(src_adr, src_port, dest_adr, dest_port);
+    String partialKey = getLocalConnectionString(src_adr, src_port);
 
     if (connectionSockets.containsKey(fullKey)) {
       return false;
@@ -86,9 +86,9 @@ public class SimpleTCPSockSpace {
   }
 
   // Remove connection socket
-  void deregisterConnectionSocket(int src_adr, int src_port, int dest_adr, int dest_port) {
-    String fullKey = src_adr + ":" + src_port + ":" + dest_adr + ":" + dest_port;
-    String partialKey = src_adr + ":" + src_port;
+  public void deregisterConnectionSocket(int src_adr, int src_port, int dest_adr, int dest_port) {
+    String fullKey = getFullConnectionString(src_adr, src_port, dest_adr, dest_port);
+    String partialKey = getLocalConnectionString(src_adr, src_port);
     socketCounts.put(partialKey, socketCounts.get(partialKey) - 1);
     connectionSockets.remove(fullKey);
   }
@@ -101,8 +101,8 @@ public class SimpleTCPSockSpace {
     node.logDebug("demultiplexConnection: connection sockets count: " + connectionSockets.size());
     node.logDebug("demultiplexConnection: searching for: " + src_adr + ":" + src_port + " " + dest_adr + ":" + dest_port);
 
-    String connectionKey = src_adr + ":" + src_port + ":" + dest_adr + ":" + dest_port;
-    String listenKey = src_adr + ":" + src_port;
+    String connectionKey = getFullConnectionString(src_adr, src_port, dest_adr, dest_port);
+    String listenKey = getLocalConnectionString(src_adr, src_port);
 
     if (connectionSockets.containsKey(connectionKey)) {
       return connectionSockets.get(connectionKey);
@@ -113,5 +113,18 @@ public class SimpleTCPSockSpace {
     else {
       return null;
     }
+  }
+
+  public void deregisterPortOnly(int src_adr, int src_port) {
+    String key = getLocalConnectionString(src_adr, src_port);
+    socketCounts.put(key, 0);
+  }
+
+  protected String getLocalConnectionString(int src_adr, int src_port) {
+    return src_adr + ":" + src_port;
+  }
+    
+  protected String getFullConnectionString(int src_adr, int src_port, int dest_adr, int dest_port) {
+    return src_adr + ":" + src_port + ":" + dest_adr + ":" + dest_port;
   }
 }

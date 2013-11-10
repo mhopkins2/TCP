@@ -123,6 +123,7 @@ public class TransferServer extends FishThread {
                             node.logError("time = " + manager.now() + " msec");
                             node.logError("data corruption detected");
                             node.logError("position = " + pos);
+                            node.logError("i = " + i);
                             node.logError("releasing connection...");
                             sock.release();
                             this.stop();

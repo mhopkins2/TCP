@@ -25,7 +25,7 @@ import java.lang.reflect.Method;
  */
 public class Node {
   private final long PingTimeout = 10000;  // Timeout pings in 10 seconds
-  private final boolean DEBUG = false;
+  private final boolean DEBUG = true;
 
   private Manager manager;
   private int addr;
@@ -296,7 +296,11 @@ public class Node {
 
       TCPSock sock = this.tcpMan.socket();
       sock.bind(localPort);
-      sock.connect(destAddr, port);
+      int ret = sock.connect(destAddr, port);
+
+      if (ret == -1)
+        return false;
+
       TransferClient client = new
           TransferClient(manager, this, sock, amount, interval, sz);
       client.start();
@@ -345,7 +349,10 @@ public class Node {
           TransferServer.DEFAULT_BUFFER_SZ;
       TCPSock sock = this.tcpMan.socket();
       sock.bind(port);
-      sock.listen(backlog);
+      int ret = sock.listen(backlog);
+
+      if (ret == -1)
+        return false;
 
       TransferServer server = new
          TransferServer(manager, this, sock, servint, workint, sz);

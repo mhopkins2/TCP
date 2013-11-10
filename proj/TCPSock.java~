@@ -19,11 +19,18 @@ public class TCPSock {
   public static final int DEFAULT_WINDOW = 16 * 1024;
   private static final int BUFFER_SIZE = 1024 * 1024;
   private static final double BETA = 0.25;
+  private static final int INITIAL_ESTIMATE_RTT = 1000;
+  private static final int INITIAL_DEV_RTT = 20;
   private static final byte dummy[] = new byte[0];
+
+  private Node node;
+  private TCPManager tcpMan;
+  private Manager manager;
 
   // TCP socket states
   enum State {
     // protocol states
+    SETUP,
     CLOSED,
     LISTEN,
     SYN_SENT,
@@ -31,18 +38,14 @@ public class TCPSock {
     SHUTDOWN // close requested, FIN not sent (due to unsent data in queue)
   }
   private State state;
-  private Node node;
-  private TCPManager tcpMan;
-  private Manager manager;
-
   private int local_adr;
   private int local_port;
-  private boolean stateEstablished; // true if value has been assigned to 'state'
 
   // Listener state
   TCPSock[] requestQueue;           // Array of established connections which have not yet been "accepted"
                                     // from listening socket
   private int entryPointer;         // Pointer to index for next insertion into requestQueue
+
 
   // Nonlistener state
   boolean clientSocket;             // true if this socket is sending data (as opposed to receiving data)
@@ -55,8 +58,8 @@ public class TCPSock {
   Hashtable<Integer, Byte> outOfOrderBytes; // Buffer for bytes received out of order
   int startData;                    // For sender, the earliest byte that has not yet been ack'ed
                                     // For receiver, the earliest byte that has not yet been read by application
-  int endData;                      // For sender, the latest byte sent that has not yet been ack'ed
-                                    // For receiver, the latest byte ack'ed that has not been read by the application
+  int endData;                      // For sender, spot in buffer for next sent byte
+                                    // For receiver, spot in buffer for next in-order byte received
   int estimatedRTT;
   int devRTT;
   boolean timerOutstanding;         // True if there is a valid timeout even outstanding on the socket (an
@@ -67,13 +70,9 @@ public class TCPSock {
     this.node = node;
     this.tcpMan = tcpMan;
     this.manager = manager;
+    this.state = State.SETUP;
     this.local_adr = local_adr;
     this.local_port = -1;
-    this.stateEstablished = false;
-    this.currentWindowSize = DEFAULT_WINDOW;
-    this.estimatedRTT = 100;
-    this.devRTT = 20;
-    this.timerOutstanding = false;
   }
 
   // For sockets that are created through listening sockets
@@ -84,19 +83,18 @@ public class TCPSock {
     this.node = node;
     this.tcpMan = tcpMan;
     this.manager = manager;
+    this.state = State.ESTABLISHED;
     this.local_adr = local_adr;
     this.local_port = local_port;
-    this.dest_adr = dest_adr;
-    this.dest_port = dest_port;
+    this.clientSocket = false;
     this.currentSeqNo = initialSeqNo + 1;
     this.currentWindowSize = DEFAULT_WINDOW;
+    this.dest_adr = dest_adr;
+    this.dest_port = dest_port;
     this.buffer = new byte[BUFFER_SIZE];
     this.outOfOrderBytes = new Hashtable<Integer, Byte>();
     this.startData = 0;
     this.endData = 0;
-    this.state = State.ESTABLISHED;
-    this.stateEstablished = true;
-    this.clientSocket = false;
 
     tcpMan.resgisterConnectionSocket(local_adr, local_port, dest_adr, dest_port, this);
     sendTransportPacket(Transport.ACK, currentSeqNo, dummy, false);
@@ -114,7 +112,7 @@ public class TCPSock {
    * @return int 0 on success, -1 otherwise
    */
   public int bind(int localPort) {
-    if (stateEstablished || localPort < 0 || localPort > Transport.MAX_PORT_NUM || !tcpMan.claimPort(local_adr, localPort)) {
+    if (state != State.SETUP || localPort < 0 || localPort > Transport.MAX_PORT_NUM || !tcpMan.claimPort(local_adr, localPort)) {
       return -1;
     }
 
@@ -128,15 +126,14 @@ public class TCPSock {
    * @return int 0 on success, -1 otherwise
    */
   public int listen(int backlog) {
-    if (stateEstablished || local_port < 0) {
-      return -1;    
+    if (state != State.SETUP || local_port < 0) {
+      return -1;
     }
 
     this.requestQueue = new TCPSock[backlog];
     this.entryPointer = 0;
     tcpMan.registerListenSocket(local_adr, local_port, this);
     state = State.LISTEN;
-    stateEstablished = true;
     return 0;
   }
 
@@ -146,7 +143,7 @@ public class TCPSock {
    * @return TCPSock The first established connection on the request queue
    */
   public TCPSock accept() {
-    if (!stateEstablished || state != State.LISTEN || entryPointer <= 0) {
+    if (state != State.LISTEN || entryPointer <= 0) {
       return null;
     }
     return requestQueue[--entryPointer];
@@ -180,25 +177,28 @@ public class TCPSock {
   // the connection is OK and allow the destination
   // to send us a FIN packet later if the connection is refused.
   public int connect(int destAddr, int destPort) {
-    if (stateEstablished || local_port < 0 || !tcpMan.resgisterConnectionSocket(local_adr, local_port, destAddr, destPort, this)) {
+    if (state != State.SETUP || local_port < 0 || !tcpMan.resgisterConnectionSocket(local_adr, local_port, destAddr, destPort, this)) {
       return -1;
     }
 
     // Initialize instance variables
-    dest_adr = destAddr;
-    dest_port = destPort;
-    clientSocket = true;
-    buffer = new byte[BUFFER_SIZE];
-    startData = 0;
-    endData = 0;
+    this.clientSocket = true;
+    this.currentSeqNo = getStartingSeqNo();
+    this.currentWindowSize = DEFAULT_WINDOW;
+    this.dest_adr = destAddr;
+    this.dest_port = destPort;
+    this.buffer = new byte[BUFFER_SIZE];
+    this.startData = 0;
+    this.endData = 0;
+    this.estimatedRTT = INITIAL_ESTIMATE_RTT;
+    this.devRTT = INITIAL_DEV_RTT;
+    this.timerOutstanding = false;
   
     // Send SYN packet
-    currentSeqNo = getStartingSeqNo();
     sendTransportPacket(Transport.SYN, currentSeqNo, dummy, false);
     updateTimer(currentSeqNo);
     state = State.SYN_SENT;
     currentSeqNo++;
-    stateEstablished = true;
 
     return 0;
   }
@@ -209,7 +209,7 @@ public class TCPSock {
   public void close() {
     // If this is a listening socket or a connection socket that does not have
     // outstanding data which has not yet been ack'ed, then release the socket.
-    if (stateEstablished && (state == State.LISTEN || !clientSocket || startData == endData)) {
+    if (state == State.SETUP || state == State.LISTEN || !clientSocket || startData == endData) {
       release();
     }
     else {
@@ -222,15 +222,19 @@ public class TCPSock {
    */
   public void release() { 
     // Listen socket
-    if (stateEstablished && state == State.LISTEN) {
+    if (state == State.LISTEN) {
       // Close everything in request queue.
       while (entryPointer > 0) {
         requestQueue[--entryPointer].close(); 
       }
       tcpMan.deregisterListenSocket(local_adr, local_port);
     }
+    // Partially setup socket
+    else if (state == State.SETUP && local_port >= 0) {
+      tcpMan.deregisterPortOnly(local_adr, local_port);
+    }
     // Connection socket
-    else if (stateEstablished) {
+    else if (state != State.CLOSED) {
       sendTransportPacket(Transport.FIN, currentSeqNo, dummy, false);
       tcpMan.deregisterConnectionSocket(local_adr, local_port, dest_adr, dest_port);
     }
@@ -248,7 +252,7 @@ public class TCPSock {
    *             than len; on failure, -1
    */
   public int write(byte[] buf, int pos, int len) {
-    if (!stateEstablished || (state != State.ESTABLISHED && state != State.SYN_SENT) || !clientSocket) {
+    if ((state != State.ESTABLISHED && state != State.SYN_SENT) || !clientSocket) {
       return -1;
     }
 
@@ -260,6 +264,11 @@ public class TCPSock {
     // If some writing can occur
     if (len != 0) {
       byte[] acceptedBytes = getAcceptedBytes(buf, pos, len);
+    
+      node.logDebug("write: the following bytes were written");
+      for (int i = 0; i < acceptedBytes.length; i++) {
+        node.logDebug(i + ": " + acceptedBytes[i]);
+      }
 
       if (state == State.ESTABLISHED) {
         sendTransportData(currentSeqNo, acceptedBytes, false);
@@ -284,7 +293,7 @@ public class TCPSock {
    *             than len; on failure, -1
    */
   public int read(byte[] buf, int pos, int len) {
-    if (!stateEstablished || state != State.ESTABLISHED || clientSocket) {
+    if (state != State.ESTABLISHED || clientSocket) {
       return -1;
     }
 
@@ -302,10 +311,10 @@ public class TCPSock {
 
   // Additional functions
   public void acceptPacket(Transport transportPacket, int from_adr) {
-    if (!stateEstablished || state == State.CLOSED) 
+    if (state == State.SETUP || state == State.CLOSED) 
       return;
 
-    printReceiverCharacter(transportPacket.getType(), transportPacket.getSeqNum());
+    //printReceiverCharacter(transportPacket.getType(), transportPacket.getSeqNum());
     
     // Incoming connection on listen socket and there is room in the request queue.
     if (state == State.LISTEN && transportPacket.getType() == Transport.SYN && entryPointer < requestQueue.length) {
@@ -325,12 +334,11 @@ public class TCPSock {
               transportPacket.getSeqNum() > currentSeqNo - bufferedDataSize() &&
               transportPacket.getSeqNum() <= currentSeqNo) {
       int unackedBytes = currentSeqNo - transportPacket.getSeqNum();
-      startData = (endData - unackedBytes + BUFFER_SIZE) % BUFFER_SIZE;
+      this.startData = (endData - unackedBytes + BUFFER_SIZE) % BUFFER_SIZE;
       timerOutstanding = false;
       if (startData != endData) {
         updateTimer(currentSeqNo - bufferedDataSize());
       }
-      // FIGURE OUT HOW TO UPDATE ESTIMATED RTT AND DEVRTT
 
       // Try to close the socket now that more data has been received
       if (state == state.SHUTDOWN) {
@@ -354,10 +362,12 @@ public class TCPSock {
 
     // Accept incoming data into buffer if space permits.
     else if (state == state.ESTABLISHED && !clientSocket && transportPacket.getType() == Transport.DATA) {
+      node.logDebug("acceptPacket: type DATA, Payload size: " + transportPacket.getPayload().length);
+
       int initialSeqNo = currentSeqNo;
       bufferReceivedData(transportPacket.getPayload(), transportPacket.getSeqNum());
       boolean repeat = initialSeqNo == currentSeqNo;
-      sendTransportPacket(Transport.ACK, currentSeqNo, dummy, true);
+      sendTransportPacket(Transport.ACK, currentSeqNo, dummy, repeat);
     } 
 
     else if (transportPacket.getType() == Transport.FIN && state != State.LISTEN && state != State.CLOSED) {
@@ -377,7 +387,8 @@ public class TCPSock {
     else if (packetType == Transport.DATA && seqNo >= currentSeqNo) {
       System.out.print(".");
     }
-    else if (packetType == Transport.ACK && seqNo > currentSeqNo - bufferedDataSize()) {
+    else if (packetType == Transport.ACK && (seqNo > currentSeqNo - bufferedDataSize() ||
+             (seqNo == currentSeqNo && state == State.SYN_SENT))) {
       System.out.print(":");
     }
     else if (packetType == Transport.ACK && seqNo <= currentSeqNo - bufferedDataSize()) {
@@ -417,6 +428,7 @@ public class TCPSock {
   protected void bufferReceivedData(byte[] newData, int seqNo) {
     for (int i = 0; i < newData.length; i++, seqNo++) {
       if (currentSeqNo == seqNo) {
+        node.logDebug("bufferedReceivedData: seqNo " + currentSeqNo + " is byte " + newData[i]);
         buffer[endData] = newData[i];
         endData = (endData + 1) % BUFFER_SIZE;
         currentSeqNo++;
@@ -447,9 +459,6 @@ public class TCPSock {
       timerOutstanding = false;
       sendTransportPacket(Transport.SYN, seqNo, dummy, true);
       updateTimer(seqNo);
-    
-      // Print character for retransmission
-      System.out.print("!");
     }
     // Timeout of DATA packet
     else if ((state == State.ESTABLISHED || state == State.SHUTDOWN) &&
@@ -458,9 +467,6 @@ public class TCPSock {
       byte[] payload = getFirstBufferedDataPacket();
       sendTransportPacket(Transport.DATA, seqNo, payload, true);
       updateTimer(seqNo);
-
-      // Print character for retransmission
-      System.out.print("!");
     }
   }
 
@@ -516,15 +522,21 @@ public class TCPSock {
       int abbreviatedLength = Math.min(Transport.MAX_PAYLOAD_SIZE, payload.length - i);
       byte[] abbreviatedData = new byte[abbreviatedLength];
       for (int j = 0; j < abbreviatedLength; j++) {
-        abbreviatedData[j] = payload[i];
+        abbreviatedData[j] = payload[i + j];
       }
+
       sendTransportPacket(Transport.DATA, seqNo + i, abbreviatedData, repeat);
     }
   }
 
   // Helper function to send a transport packet.
   protected void sendTransportPacket(int transportType, int seqNo, byte[] payload, boolean repeat) {
-    printSenderCharacter(transportType, repeat);
+    //printSenderCharacter(transportType, repeat);
+
+    node.logDebug("sendTransportPacket: the following bytes were sent as payload");
+    for (int i = 0; i < payload.length; i++) {
+      node.logDebug(i + ": " + payload[i]);
+    }
 
     Transport transportPacket = new Transport(local_port, dest_port, transportType, currentWindowSize, seqNo, payload);
     byte[] packetPayload = transportPacket.pack();
