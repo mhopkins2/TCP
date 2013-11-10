@@ -64,6 +64,8 @@ public class TCPSock {
   int devRTT;
   boolean timerOutstanding;         // True if there is a valid timeout even outstanding on the socket (an
                                     // even that will cause the socket to have to resend a packet)
+  boolean closePending;             // True if client has requested socket close, but server
+                                    // isn't finished reading data
 
   // To create a listening socket or a client socket
   public TCPSock(Node node, TCPManager tcpMan, Manager manager, int local_adr) {
@@ -95,6 +97,7 @@ public class TCPSock {
     this.outOfOrderBytes = new Hashtable<Integer, Byte>();
     this.startData = 0;
     this.endData = 0;
+    this.closePending = false;
 
     tcpMan.resgisterConnectionSocket(local_adr, local_port, dest_adr, dest_port, this);
     sendTransportPacket(Transport.ACK, currentSeqNo, dummy, false);
@@ -233,6 +236,9 @@ public class TCPSock {
     else if (state == State.SETUP && local_port >= 0) {
       tcpMan.deregisterPortOnly(local_adr, local_port);
     }
+    else if (!clientSocket && closePending) {
+      tcpMan.deregisterConnectionSocket(local_adr, local_port, dest_adr, dest_port);
+    }
     // Connection socket
     else if (state != State.CLOSED) {
       sendTransportPacket(Transport.FIN, currentSeqNo, dummy, false);
@@ -245,7 +251,7 @@ public class TCPSock {
    * Write to the socket up to len bytes from the buffer buf starting at
    * position pos.
    *
-   * @param buf byte[] the buffer to write from
+   * @param buf byte[] the buffer to write from 
    * @param pos int starting position in buffer
    * @param len int number of bytes to write
    * @return int on success, the number of bytes written, which may be smaller
@@ -302,6 +308,10 @@ public class TCPSock {
     len = Math.min(len, buf.length - pos);
     len = Math.min(len, bufferedDataSize());
     readBytesFromBuffer(buf, pos, len);
+
+    if (closePending && startData == endData)
+      release();
+
     return len;
   }
 
@@ -313,6 +323,8 @@ public class TCPSock {
   public void acceptPacket(Transport transportPacket, int from_adr) {
     if (state == State.SETUP || state == State.CLOSED) 
       return;
+
+    node.logDebug("acceptPacket: sequence number " + transportPacket.getSeqNum());
 
     //printReceiverCharacter(transportPacket.getType(), transportPacket.getSeqNum());
     
@@ -369,6 +381,12 @@ public class TCPSock {
       boolean repeat = initialSeqNo == currentSeqNo;
       sendTransportPacket(Transport.ACK, currentSeqNo, dummy, repeat);
     } 
+
+    // Keep socket open until application is finished reading
+    else if (transportPacket.getType() == Transport.FIN && state == State.ESTABLISHED && 
+             !clientSocket && startData != endData) {
+      this.closePending = true;
+    }
 
     else if (transportPacket.getType() == Transport.FIN && state != State.LISTEN && state != State.CLOSED) {
       tcpMan.deregisterConnectionSocket(local_adr, local_port, dest_adr, dest_port);
@@ -496,7 +514,7 @@ public class TCPSock {
 
   // Read 'len' bytes from 'buffer' into 'buf' starting at 'pos'
   protected void readBytesFromBuffer(byte[] buf, int pos, int len) {
-    for (int i = pos; i < len; i++) {
+    for (int i = pos; i < pos + len; i++) {
       buf[i] = buffer[startData++];
     }
   } 
@@ -533,6 +551,7 @@ public class TCPSock {
   protected void sendTransportPacket(int transportType, int seqNo, byte[] payload, boolean repeat) {
     //printSenderCharacter(transportType, repeat);
 
+    node.logDebug("sendTransportPacket: sequence number " + seqNo);
     node.logDebug("sendTransportPacket: the following bytes were sent as payload");
     for (int i = 0; i < payload.length; i++) {
       node.logDebug(i + ": " + payload[i]);
