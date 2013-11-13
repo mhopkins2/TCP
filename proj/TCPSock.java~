@@ -16,11 +16,11 @@ import java.util.Hashtable;
 
 public class TCPSock {
 
-  public static final int DEFAULT_WINDOW = 16 * 1;
+  public static final int DEFAULT_WINDOW = 16 * 1024;
   private static final int BUFFER_SIZE = 1024 * 1024;
+  private static final double ALPHA = 0.125;
   private static final double BETA = 0.25;
-  private static final int INITIAL_ESTIMATE_RTT = 40;
-  private static final int INITIAL_DEV_RTT = 10;
+  private static final int INITIAL_TIMEOUT = 400;
   private static final byte dummy[] = new byte[0];
 
   private Node node;
@@ -60,8 +60,11 @@ public class TCPSock {
                                     // For receiver, the earliest byte that has not yet been read by application
   int endData;                      // For sender, spot in buffer for next sent byte
                                     // For receiver, spot in buffer for next in-order byte received
-  int estimatedRTT;
+  int smoothedRTT;
   int devRTT;
+  int timeout;
+  int seqNoTracked;                 // Sequence number which is being used to calculate latest RTT;
+  long seqNoTimestamp;              // Time which 'seqNoTracked' was sent
   boolean timerOutstanding;         // True if there is a valid timeout even outstanding on the socket (an
                                     // even that will cause the socket to have to resend a packet)
   boolean closePending;             // True if client has requested socket close, but server
@@ -193,8 +196,11 @@ public class TCPSock {
     this.buffer = new byte[BUFFER_SIZE];
     this.startData = 0;
     this.endData = 0;
-    this.estimatedRTT = INITIAL_ESTIMATE_RTT;
-    this.devRTT = INITIAL_DEV_RTT;
+    this.smoothedRTT = -1;
+    this.devRTT = -1;
+    this.timeout = INITIAL_TIMEOUT;
+    this.seqNoTracked = -1;
+    this.seqNoTimestamp = -1;
     this.timerOutstanding = false;
   
     // Send SYN packet
@@ -269,6 +275,12 @@ public class TCPSock {
 
     // If some writing can occur
     if (len != 0) {
+
+      if (seqNoTracked == -1) {
+        seqNoTracked = currentSeqNo;
+        seqNoTimestamp = manager.now();
+      }
+
       byte[] acceptedBytes = getAcceptedBytes(buf, pos, len);
     
       node.logDebug("write: the following bytes were written");
@@ -326,7 +338,7 @@ public class TCPSock {
 
     node.logDebug("acceptPacket: sequence number " + transportPacket.getSeqNum());
 
-    //printReceiverCharacter(transportPacket.getType(), transportPacket.getSeqNum());
+    printReceiverCharacter(transportPacket.getType(), transportPacket.getSeqNum());
     
     // Incoming connection on listen socket and there is room in the request queue.
     if (state == State.LISTEN && transportPacket.getType() == Transport.SYN && entryPointer < requestQueue.length) {
@@ -345,6 +357,30 @@ public class TCPSock {
               transportPacket.getType() == Transport.ACK &&
               transportPacket.getSeqNum() > currentSeqNo - bufferedDataSize() &&
               transportPacket.getSeqNum() <= currentSeqNo) {
+
+      if (seqNoTracked != -1 && transportPacket.getSeqNum() > seqNoTracked) {
+
+        // Update timeout value as per RFC 2988
+        seqNoTracked = -1;
+        int timeDelta = (int) (manager.now() - seqNoTimestamp);
+
+        // First RTT measurement
+        if (smoothedRTT < 0) {
+          smoothedRTT = timeDelta;
+          devRTT = timeDelta / 2;
+        }
+        // Subsequent RTT measurements 
+        else {
+          devRTT = (int) ((1 - BETA) * devRTT + BETA * Math.abs(smoothedRTT - timeDelta));
+          smoothedRTT = (int) ((1 - ALPHA) * smoothedRTT + ALPHA * timeDelta);
+        }
+        timeout = smoothedRTT + Math.max(1, 4 * devRTT);
+        node.logDebug("acceptPacket: timeDelta " + timeDelta + " ms");
+        node.logDebug("acceptPacket: new timeout value " + timeout + " ms");
+      }
+
+      node.logDebug("acceptPacket: bufferedData size " + bufferedDataSize());
+
       int unackedBytes = currentSeqNo - transportPacket.getSeqNum();
       this.startData = (endData - unackedBytes + BUFFER_SIZE) % BUFFER_SIZE;
       timerOutstanding = false;
@@ -396,32 +432,33 @@ public class TCPSock {
   }
 
   protected void printReceiverCharacter(int packetType, int seqNo) {
-    if (packetType == Transport.SYN && state == State.LISTEN) {
+    if (packetType == Transport.SYN) {
       System.out.print("S");
     }
-    else if (packetType == Transport.FIN && state != State.CLOSED) {
+    else if (packetType == Transport.FIN) {
       System.out.print("F");
     }
-    else if (packetType == Transport.DATA && seqNo >= currentSeqNo) {
+    else if (packetType == Transport.DATA) {
       System.out.print(".");
     }
     else if (packetType == Transport.ACK && (seqNo > currentSeqNo - bufferedDataSize() ||
              (seqNo == currentSeqNo && state == State.SYN_SENT))) {
       System.out.print(":");
     }
-    else if (packetType == Transport.ACK && seqNo <= currentSeqNo - bufferedDataSize()) {
+    else if (packetType == Transport.ACK) {
       System.out.print("?");
     }
-    else {
+
+    // Repeat receipt of packet
+    if ((packetType == Transport.SYN && state != State.LISTEN) ||
+        (packetType == Transport.FIN && (state == State.CLOSED || state == State.SHUTDOWN || closePending)) ||
+        (packetType == Transport.DATA && (seqNo < currentSeqNo || outOfOrderBytes.containsKey(seqNo)))) {
       System.out.print("!");
     }
   }
 
   protected void printSenderCharacter(int transportType, boolean repeat) {
-    if (repeat) {
-      System.out.print("!");
-    }
-    else if (transportType == Transport.SYN) {
+    if (transportType == Transport.SYN) {
       System.out.print("S");
     }
     else if (transportType == Transport.FIN) {
@@ -429,6 +466,10 @@ public class TCPSock {
     }
     else if (transportType == Transport.DATA) {
       System.out.print(".");
+    }
+
+    if (repeat) {
+      System.out.print("!");
     }
   }
 
@@ -462,6 +503,7 @@ public class TCPSock {
   // Move all bytes possible from 'outOfOrderBytes' to 'buffer'.
   protected void extractOutOfOrderBytes() {
     while (outOfOrderBytes.containsKey(currentSeqNo)) {
+      node.logDebug("Extracting out of order byte");
       buffer[endData] = outOfOrderBytes.get(currentSeqNo);
       outOfOrderBytes.remove(currentSeqNo);
       endData = (endData + 1) % BUFFER_SIZE;
@@ -472,8 +514,6 @@ public class TCPSock {
   // When you send a packet, add an event for handleSocketTimeout
   // with the initial sequence number of the packet as an argument (for the callback)
   public void handleSocketTimeout(Integer seqNo) {
-    node.logDebug("handleSocketTimeout: Timeout occured for seqNo " + seqNo);
-
     // Timeout of SYN packet
     if (state == State.SYN_SENT) {
       timerOutstanding = false;
@@ -483,6 +523,13 @@ public class TCPSock {
     // Timeout of DATA packet
     else if ((state == State.ESTABLISHED || state == State.SHUTDOWN) &&
               seqNo == currentSeqNo - bufferedDataSize()) {
+
+      node.logDebug("handleSocketTimeout: Timeout occured for seqNo " + seqNo);
+
+      // Exponential backoff of timeout value as per RFC 2988
+      timeout *= 2;
+      seqNoTracked = seqNo;
+      seqNoTimestamp = manager.now();
       timerOutstanding = false;
       byte[] payload = getFirstBufferedDataPacket();
       sendTransportPacket(Transport.DATA, seqNo, payload, true);
@@ -573,7 +620,7 @@ public class TCPSock {
         Object[] params = {new Integer(seqNo)};
 	      Method method = Callback.getMethod("handleSocketTimeout", this, paramTypes);
 	      Callback cb = new Callback(method, this, params);
-	      this.manager.addTimer(local_adr, estimatedRTT + 4 * devRTT, cb);
+	      this.manager.addTimer(local_adr, timeout, cb);
         timerOutstanding = true;
 	    }catch(Exception e) {
 	      node.logError("Failed to add timer callback. Method Name: " + "handleSocketTimeout" +
