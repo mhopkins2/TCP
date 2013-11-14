@@ -16,11 +16,11 @@ import java.util.Hashtable;
 
 public class TCPSock {
 
-  public static final int DEFAULT_WINDOW = 16 * 1024;
+  public static final int DEFAULT_WINDOW = 8 * 1024;
   private static final int BUFFER_SIZE = 1024 * 1024;
   private static final double ALPHA = 0.125;
   private static final double BETA = 0.25;
-  private static final int INITIAL_TIMEOUT = 400;
+  private static final int INITIAL_TIMEOUT = 2000;
   private static final byte dummy[] = new byte[0];
 
   private Node node;
@@ -264,7 +264,7 @@ public class TCPSock {
    *             than len; on failure, -1
    */
   public int write(byte[] buf, int pos, int len) {
-    if ((state != State.ESTABLISHED && state != State.SYN_SENT) || !clientSocket) {
+    if (pos < 0 || pos >= buf.length || (state != State.ESTABLISHED && state != State.SYN_SENT) || !clientSocket) {
       return -1;
     }
 
@@ -283,10 +283,10 @@ public class TCPSock {
 
       byte[] acceptedBytes = getAcceptedBytes(buf, pos, len);
     
-      node.logDebug("write: the following bytes were written");
+  /*    node.logDebug("write: the following bytes were written");
       for (int i = 0; i < acceptedBytes.length; i++) {
         node.logDebug(i + ": " + acceptedBytes[i]);
-      }
+      }*/
 
       if (state == State.ESTABLISHED) {
         sendTransportData(currentSeqNo, acceptedBytes, false);
@@ -311,7 +311,7 @@ public class TCPSock {
    *             than len; on failure, -1
    */
   public int read(byte[] buf, int pos, int len) {
-    if (state != State.ESTABLISHED || clientSocket) {
+    if (pos < 0 || state != State.ESTABLISHED || clientSocket) {
       return -1;
     }
 
@@ -412,10 +412,8 @@ public class TCPSock {
     else if (state == state.ESTABLISHED && !clientSocket && transportPacket.getType() == Transport.DATA) {
       node.logDebug("acceptPacket: type DATA, Payload size: " + transportPacket.getPayload().length);
 
-      int initialSeqNo = currentSeqNo;
       bufferReceivedData(transportPacket.getPayload(), transportPacket.getSeqNum());
-      boolean repeat = initialSeqNo == currentSeqNo;
-      sendTransportPacket(Transport.ACK, currentSeqNo, dummy, repeat);
+      sendTransportPacket(Transport.ACK, currentSeqNo, dummy, false);
     } 
 
     // Keep socket open until application is finished reading
@@ -487,7 +485,7 @@ public class TCPSock {
   protected void bufferReceivedData(byte[] newData, int seqNo) {
     for (int i = 0; i < newData.length; i++, seqNo++) {
       if (currentSeqNo == seqNo) {
-        node.logDebug("bufferedReceivedData: seqNo " + currentSeqNo + " is byte " + newData[i]);
+    //    node.logDebug("bufferedReceivedData: seqNo " + currentSeqNo + " is byte " + newData[i]);
         buffer[endData] = newData[i];
         endData = (endData + 1) % BUFFER_SIZE;
         currentSeqNo++;
@@ -503,7 +501,7 @@ public class TCPSock {
   // Move all bytes possible from 'outOfOrderBytes' to 'buffer'.
   protected void extractOutOfOrderBytes() {
     while (outOfOrderBytes.containsKey(currentSeqNo)) {
-      node.logDebug("Extracting out of order byte");
+   //   node.logDebug("Extracting out of order byte");
       buffer[endData] = outOfOrderBytes.get(currentSeqNo);
       outOfOrderBytes.remove(currentSeqNo);
       endData = (endData + 1) % BUFFER_SIZE;
@@ -516,6 +514,9 @@ public class TCPSock {
   public void handleSocketTimeout(Integer seqNo) {
     // Timeout of SYN packet
     if (state == State.SYN_SENT) {
+
+      node.logDebug("handleSocketTimeout: Timeout occured for seqNo " + seqNo);
+
       timerOutstanding = false;
       sendTransportPacket(Transport.SYN, seqNo, dummy, true);
       updateTimer(seqNo);
@@ -598,14 +599,14 @@ public class TCPSock {
 
   // Helper function to send a transport packet.
   protected void sendTransportPacket(int transportType, int seqNo, byte[] payload, boolean repeat) {
-    //printSenderCharacter(transportType, repeat);
+    printSenderCharacter(transportType, repeat);
 
     node.logDebug("sendTransportPacket: sequence number of packet " + seqNo);
     node.logDebug("sendTransportPacket: sequence number of node " + currentSeqNo);
-    node.logDebug("sendTransportPacket: the following bytes were sent as payload");
+ /*   node.logDebug("sendTransportPacket: the following bytes were sent as payload");
     for (int i = 0; i < payload.length; i++) {
       node.logDebug(i + ": " + payload[i]);
-    }
+    }*/
 
     Transport transportPacket = new Transport(local_port, dest_port, transportType, currentWindowSize, seqNo, payload);
     byte[] packetPayload = transportPacket.pack();

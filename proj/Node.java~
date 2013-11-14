@@ -25,7 +25,7 @@ import java.lang.reflect.Method;
  */
 public class Node {
   private final long PingTimeout = 10000;  // Timeout pings in 10 seconds
-  private final boolean DEBUG = true;
+  private final boolean DEBUG = false;
 
   private Manager manager;
   private int addr;
@@ -89,6 +89,14 @@ public class Node {
     }
 
     if (this.matchServerCommand(command)) {
+      return;
+    }
+
+    if (this.matchMultiTransferCommand(command)) {
+      return;
+    }
+
+    if (this.matchMultiServerCommand(command)) {
       return;
     }
 
@@ -356,6 +364,118 @@ public class Node {
 
       TransferServer server = new
          TransferServer(manager, this, sock, servint, workint, sz);
+      server.start();
+      logOutput("server started, port = " + port);
+
+      return true;
+    }catch (Exception e) {
+      logError("Exception: " + e);
+    }
+
+    return false;
+  }
+
+    private boolean matchMultiTransferCommand(String command) {
+    // multitransfer command syntax:
+    //     multitransfer dest port first_localPort connection_count amount [interval sz]
+    // Synopsis:
+    //     Connect to a transfer server listening on port <port> at node
+    //     <dest>, using local ports <first_localPort> through <first_localPort> +
+    //      connection_count, and transfer <amount> bytes through each connection
+    // Required arguments:
+    //     dest: address of destination node
+    //     port: destination port
+    //     first_localPort: local port of first socket
+    //     amount: number of bytes to transfer through each socket
+    // Optional arguments:
+    //     interval: execution interval of the transfer client, default 1 second
+    //     sz: buffer size of the transfer client, default 65536
+    String[] args = command.split(" ");
+    if (args.length < 6 || args.length > 8 || !args[0].equals("multitransfer")) {
+      return false;
+    }
+
+    try {
+      int destAddr = Integer.parseInt(args[1]);
+      int port = Integer.parseInt(args[2]);
+      int first_localPort = Integer.parseInt(args[3]);
+      int connection_count = Integer.parseInt(args[4]);
+      int amount = Integer.parseInt(args[5]);
+      long interval =
+          args.length >= 7 ?
+          Integer.parseInt(args[6]) :
+          TransferClient.DEFAULT_CLIENT_INTERVAL;
+      int sz =
+         args.length == 8 ?
+         Integer.parseInt(args[7]) :
+         TransferClient.DEFAULT_BUFFER_SZ;
+
+      TCPSock[] socks = new TCPSock[connection_count];
+
+      for (int i = 0; i < connection_count; i++) {
+        socks[i] = this.tcpMan.socket();
+        socks[i].bind(first_localPort + i);
+        int ret = socks[i].connect(destAddr, port);
+
+        if (ret == -1)
+          return false;
+      }
+
+      MichaelTestClient client = new
+          MichaelTestClient(manager, this, socks, amount, interval, sz);
+      client.start();
+
+      return true;
+    }catch (Exception e) {
+      logError("Exception: " + e);
+    }
+
+    return false;
+  }
+
+  private boolean matchMultiServerCommand(String command) {
+    // multiserver command syntax:
+    //     server port backlog [servint workint sz]
+    // Synopsis:
+    //     Start a transfer server at the local node, listening on port
+    //     <port>.  The server has a maximum pending (incoming) connection
+    //     queue of length <backlog>.
+    // Required arguments:
+    //     port: listening port
+    //     backlog: maximum length of pending connection queue
+    // Optional arguments:
+    //     servint: execution interval of the transfer server, default 1 second
+    //     workint: execution interval of the transfer worker, default 1 second
+    //     sz: buffer size of the transfer worker, default 65536
+    String[] args = command.split(" ");
+    if (args.length < 3 || args.length > 6 || !args[0].equals("multiserver")) {
+      return false;
+    }
+
+    try {
+      int port = Integer.parseInt(args[1]);
+      int backlog = Integer.parseInt(args[2]);
+      long servint =
+          args.length >= 4 ?
+          Integer.parseInt(args[3]) :
+          TransferServer.DEFAULT_SERVER_INTERVAL;
+      long workint =
+          args.length >= 5 ?
+          Integer.parseInt(args[4]) :
+          TransferServer.DEFAULT_WORKER_INTERVAL;
+      int sz =
+          args.length == 6 ?
+          Integer.parseInt(args[5]) :
+          TransferServer.DEFAULT_BUFFER_SZ;
+      TCPSock sock = this.tcpMan.socket();
+      sock.bind(port);
+      int ret = sock.listen(backlog);
+
+      if (ret == -1)
+        return false;
+
+      MichaelTestServer server = new
+         MichaelTestServer(manager, this, sock, servint, workint, sz);
       server.start();
       logOutput("server started, port = " + port);
 
