@@ -1,0 +1,90 @@
+My implementation of TCP consists of modifications to the following 4 files:
+  1) Node.java
+  2) TCPManager.java
+  3) SimpleTCPSockSpace.java - a file I created to keep track of active listening sockets and connection sockets. Used by TCPManager.
+  4) TCPSock.java
+
+I'm not sure exactly how detailed the transport layer interface is supposed to be, so feel free to skim/skip the next section. All of the important high level design decisions are documented afterwards.
+
+Transport Layer interface:
+  -TCPSock obtained through call to TCPManager.socket()
+  -int bind(localPort)
+      -binds TCPSock to localPort at local node. 
+      -returns 0 if successful
+      -returns -1 if localPort is out of valid port range or localPort is already being used by another socket
+  -int listen(backlog)
+      -Turns TCPSock into a listening socket. Must be called after bind(localPort)
+      -Registers TCPSock with TCPSockManager as a listening socket
+      -Returns -1 if a successful bind has not yet occurred, else returns 0 for success
+  -TCPSock accept()
+      -Returns next connection socket in request queue if there is one, else returns null
+  -int connect(int destAddr, int destPort)
+      -Turns TCPSock into a connection socket and registers TCPSock as a connection socket with TCPManager
+      -Sends SYN packet to destAddr:destPort and starts a timer for that SYN packet
+      -Returns -1 if a successful bind has not yet occurred, else returns 0 for success
+  -void close()
+      -Closes the connection if the socket is a listening socket or if the socket is receiving data or if all data has been sent from the socket. Also, deregisters the socket with TCPManager, and for a listening socket, closes all sockets in the request queue.
+      -Sends a FIN packet to destAddr:destPort if socket is a connection socket
+      -Otherwise, socket enters SHUTDOWN state (pending closure)
+  -void release()
+      -Same as close() except always closes the socket (even if data is still in buffer)
+  -int write(buf, pos, len)
+      -Writes up to len bytes from buf (making sure not to exceed current window size) starting at position pos to be sent to destAddr:destPort
+      -Sends all bytes written immediately to destination (unless currently in SYN_SENT state)
+      -Timer is started for first sent packet if there is not already another timer outstanding
+      -Returns the number of bytes written on success, returns -1 if error occurs
+  -int read(buf, pos, len)
+      -Reads up to len bytes into buf (but not to exceed the maximum amount of contiguous buffered data) starting at position pos
+      -Returns the number of bytes read on success, returns -1 if error occurs.
+
+
+The interface for TCPSock used by TCPManager is through acceptPacket(TransportPacket, from_adr)
+  -If a SYN packet if received by a listening socket, a connection socket is created if room exists in the request queue for the listening socket. This connection socket is registered with TCPManager
+  -If an ACK packet is received that advances the acknowledgement field, the timeout value is potentially updated as per RFC 2988 (if the ACK packet is for a byte currently being tracked), and the minimum non-ACK'ed byte is advanced
+  -If an ACK packet is received for a SYN packet, the TCPSock enters the ESTABLISHED state and can start to send data
+  -If a DATA packet is received, as much data as will fit in the buffer is stored, and the appropriate ACK packet is sent in response.
+  -If a FIN packet is received, the connection is closed as soon as all data in buffer is read (or closed if called by socket).
+
+
+
+
+High level design decisions:
+
+1) I decided to divide services between Node, TCPManager (and SimpleTCPSockSapce), and TCPSock as follows:
+    a) Node: Multiplex/Demultiplex packets. Packets of type TRANSPORT_PKT are given to TCPManager.
+    b) TCPManager (and SimpleTCPSockSpace): Keep track of active listening sockets and connection sockets and pass incoming packets to the correct socket through the acceptPacket method in TCPSock
+    c) TCPSock: essentially all of the socket functionality specified for part 1 is pushed down into TCPSock
+
+2) I chose to keep track of active sockets in SimpleTCPSockSpace using one hashtable for listening sockets and one hashtable for connection sockets. For listening sockets, sockets are hashed based on src_adr:src_port (after listen() is called on the socket, it registers itself with TCPManager). For connection sockets, sockets are hashed based on src_adr:src_port:dest_adr:dest_port. When a packet arrives, the connection sockets hashtable is checked first and then the listening sockets hashtable. In addition, SimpleTCPSockSpace keeps track of which src_adr:src_port pairs are currently in use (through another hashtable).
+
+3) I chose to implement buffered data from the sender (that has not yet been ack'ed) and contiguous buffered data by the receiver (data which has not yet been read()) with a ring buffer of bytes (a fixed sized array that is treated as circular). Out of order bytes received by the receiver are stored temporarily in a hashtable until they can be (contiguously) added to the buffer (and then the bytes are removed from the hashtable). Since this hashtable should be small and bytes will only temporarily reside there, this seems justified.
+
+4) I chose to implement the timeout mechanism specified in RFC 2988 for updating the timeout value for sent packets. In particular, I use Karn's algorithm for taking RTT samples. Estimating this timeout value for every byte received doesn't seem practical. Also, until I implement Part II, I found it empirically better to still consider ambiguous ACK's in calculating the timeout value with large window sizes and high loss rates because the benefits of the additional data points outweighed the (small) probability of a very long time of delivery of a first ACK packet. I will remove this after I implement variable window size.
+
+5) The connect() and listen() methods (if successful) register their sockets with TCPManager for it to keep track of them. In other words, TCPManager only tracks sockets after connect() or listen() has been called. This is due to the design decision to use separate hashtables for listening sockets and connection sockets.
+
+6) If socket A sends a FIN packet to socket B, socket B doesn't close until either close/release is called on socket B or until all data is read from socket B.
+
+7) A maximum of one valid timeout event is allowed to be outstanding for a socket sending data at a time. However, because there is not a convenient way to deactivate a timeout event, timeout events that are invalidated (because the appropriate ACK packet is received) immediately return when the timeout function is (spuriously) called. The timeout method uses a sequence_number parameter to determine which sent packet the timeout corresponds to.
+
+8) If data is written while a socket is in the SYN_SENT state, it is buffered, and when the appropriate ACK is sent, all buffered data is sent.
+
+9) Data is sent immediately after it is written when a socket is not in the SYN_SENT state. The written data is divided into the minimum number of packets possible
+
+10) On a timeout event, only the first packet not yet ACK'ed is resent by the sender.
+
+11) Initial sequence numbers are chosen from a uniformly random distribution that ranges from [0, 2^16). Choosing 2^16 as the upper bound is done to minimize the possibility of integer overflow for the sequence number at the sender and receiver.
+
+
+
+
+Tests implemented:
+
+I have implemented test applications for my transport layer implementation in MichaelTestClient.java nad MichaelTestServer.java.
+
+The syntax for the client and server respectively are:
+
+multitransfer dest port first_localPort connection_count amount [interval sz]
+multiserver port backlog [servint workint sz]
+
+multitransfer opens up connection_count number of sockets to a multiserver starting at first_localPort and assigning ports consecutively to new sockets. Multiclient randomly switches between all active sockets and sends new data from the chosen socket. This is a good method for testing concurrency between clients and a server and will be useful as a base for testing flow and congestion control in part 2.
