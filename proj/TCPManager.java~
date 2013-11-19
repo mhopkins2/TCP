@@ -101,9 +101,9 @@ public class TCPManager {
     activeConnections.deregisterConnectionSocket(src_adr, src_port, dest_adr, dest_port);
   }
 
-  void releasePortOnly(int src_adr, int src_port) {
+  void deregisterPortOnly(int src_adr, int src_port) {
     node.logDebug("releasePortOnly: request for " + src_adr + ":" + src_port);
-    activeConnections.releasePortOnly(src_adr, src_port);
+    activeConnections.deregisterPortOnly(src_adr, src_port);
   }
   ////////////////////////////////////////////////////////////////////////////////////////////////
 }

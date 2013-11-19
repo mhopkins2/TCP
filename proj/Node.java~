@@ -25,7 +25,7 @@ import java.lang.reflect.Method;
  */
 public class Node {
   private final long PingTimeout = 10000;  // Timeout pings in 10 seconds
-  private final boolean DEBUG = false;
+  private final boolean DEBUG = true;
 
   private Manager manager;
   private int addr;
@@ -435,7 +435,7 @@ public class Node {
 
   private boolean matchMultiServerCommand(String command) {
     // multiserver command syntax:
-    //     server port backlog [servint workint sz]
+    //     multiserver port backlog [servint workint sz]
     // Synopsis:
     //     Start a transfer server at the local node, listening on port
     //     <port>.  The server has a maximum pending (incoming) connection

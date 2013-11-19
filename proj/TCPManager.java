@@ -51,7 +51,7 @@ public class TCPManager {
 
   // Additional functions
 
-  // Stub to demultiplex received packets
+  // Demultiplex received packets
   public void receiveTransportPacket(Transport transportPacket, int from_adr, int to_adr) {
     node.logDebug("receiveTransportPacket: from " + from_adr + ", " + "to " + to_adr);
 
