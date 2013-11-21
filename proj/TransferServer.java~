@@ -124,6 +124,8 @@ public class TransferServer extends FishThread {
                             node.logError("data corruption detected");
                             node.logError("position = " + pos);
                             node.logError("i = " + i);
+                            node.logError("Expected byte: " + (byte) i);
+                            node.logError("Received byte: " + buf[i]);
                             node.logError("releasing connection...");
                             sock.release();
                             this.stop();
